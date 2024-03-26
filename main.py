@@ -35,7 +35,9 @@ for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=
     # Send the image for prediction
     response = send_for_prediction("temp_image.png")
     if response.ok:
-        print(response.json())
+        data = response.json()
+        if data["predicted_probability"] > 0.75:
+            print(f"\rThe leaf is {data['predicted_class']} with probablity {data['predicted_probability']}", end="")
     else:
         print("Failed to get response from server", response.text)
     
