@@ -1,57 +1,43 @@
-from flask import Flask, request, jsonify
-import torch
-from PIL import Image
-from torchvision import transforms
-import torchvision.models as models
+import requests
+from picamera import PiCamera
+from picamera.array import PiRGBArray
+import io
+import time
 
-app = Flask(__name__)
+# Initialize the camera
+camera = PiCamera()
+camera.resolution = (640, 480)
+rawCapture = PiRGBArray(camera, size=(640, 480))
 
-# Define class labels
-class_labels = ["Bacterial spot", "Healthy"]
+# Allow the camera to warm up
+time.sleep(2)
 
-# Initialize the model
-google_net = models.googlenet(pretrained=True)
-google_net.fc = torch.nn.Linear(1024, 2)  # Corrected for binary classification
+# The URL to your Flask server endpoint
+url = 'http://<Flask_Server_IP>:8000/'
 
-# Load the trained model
-model_path = 'Swingog.h5'
-model = google_net
-model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
-model.eval()
+print("Will talk to server at", url)
 
-# Set the device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
+def send_for_prediction(image_path):
+    """Send the captured image to the Flask server for prediction."""
+    with open(image_path, 'rb') as f:
+        files = {'file': f}
+        response = requests.post(url, files=files)
+    return response
 
-# Define preprocessing
-preprocess = transforms.Compose([
-    transforms.Resize((256, 256)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
-
-@app.route('/', methods=['POST'])
-def index():
-    if request.method == 'POST':
-        # Handle image upload and prediction
-        uploaded_file = request.files['file']
-        if uploaded_file.filename != '':
-            image = Image.open(uploaded_file)
-            image_tensor = preprocess(image).unsqueeze(0).to(device)
-
-            with torch.no_grad():
-                outputs = model(image_tensor)
-                probs = torch.softmax(outputs, dim=1)[0]
-                predicted_class_idx = torch.argmax(probs).item()
-                predicted_class = class_labels[predicted_class_idx]
-                predicted_probability = probs[predicted_class_idx].item()
-
-            response = {
-                'predicted_class': predicted_class,
-                'predicted_probability': predicted_probability
-            }
-            return jsonify(response)
-    return jsonify({'error': 'No file uploaded'}), 400
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000, debug=True)
+# Continuously capture images from the camera and send them for processing
+for frame in camera.capture_continuous(rawCapture, format='jpeg', use_video_port=True):
+    # Save the frame as an in-memory file
+    stream = io.BytesIO(frame.array)
+    image_path = 'temp_image.jpg'  # Temporary image path
+    with open(image_path, 'wb') as f:
+        f.write(stream.getvalue())
+    
+    # Send the image for prediction
+    response = send_for_prediction(image_path)
+    if response.ok:
+        print(response.json())
+    else:
+        print("Failed to get response from server", response.text)
+    
+    # Clear the stream to make it ready for the next frame
+    rawCapture.truncate(0)
