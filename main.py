@@ -1,45 +1,32 @@
-import requests
-from picamera import PiCamera
-from picamera.array import PiRGBArray
-import io
-import time
+from flask import Flask, request, jsonify
 from PIL import Image
+from ultralytics import YOLO
 
-# initialize the camera and grab a reference to the raw camera capture
-camera = PiCamera()
-camera.resolution = (640, 480)
-camera.framerate = 32
-rawCapture = PiRGBArray(camera, size=(640, 480))
+app = Flask(__name__)
 
-time.sleep(2)
+model = YOLO('yolov8x.pt')
 
-# The URL to your Flask server endpoint
-url = 'http://192.168.0.135:8000/'
 
-print("Will talk to server at", url)
+@app.route('/', methods=['POST'])
+def index():
+    if request.method == 'POST':
+        # Handle image upload and prediction
+        uploaded_file = request.files['file']
+        if uploaded_file.filename != '':
+            image = Image.open(uploaded_file)
+            result = model.predict(source=image)[0]
+            names = result.names
 
-def send_for_prediction(image_path):
-    """Send the captured image to the Flask server for prediction."""
-    with open(image_path, 'rb') as f:
-        files = {'file': f}
-        response = requests.post(url, files=files)
-    return response
+            predicted_class = names[int(result.boxes.cls[0])]
+            predicted_probability = float(result.boxes.conf[0])
 
-# Continuously capture images from the camera and send them for processing
-for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
-    # Save the frame as an in-memory file
-    image = frame.array
-    Image.fromarray(image).save("temp_image.png")
-    # cv2.save("temp_image.png", image)
-  
-    # Send the image for prediction
-    response = send_for_prediction("temp_image.png")
-    if response.ok:
-        data = response.json()
-        if data["predicted_probability"] > 0.75:
-            print(f"\rThe leaf is {data['predicted_class']} with probablity {data['predicted_probability']}", end="")
-    else:
-        print("Failed to get response from server", response.text)
-    
-    # Clear the stream to make it ready for the next frame
-    rawCapture.truncate(0)
+            response = {
+                'predicted_class': predicted_class,
+                'predicted_probability': predicted_probability
+            }
+            return jsonify(response)
+    return jsonify({'error': 'No file uploaded'}), 400
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8000, debug=True)
